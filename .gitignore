@@ -1,0 +1,37 @@
+*/__pycache__
+*.pyc
+KEY.py
+/.idea/jupyter-settings.xml
+/test
+NaturalLanguageGraphExploitation/API_KEY.ipynb
+.influenciae_env/
+rag_system/faiss_indexes/*.pkl
+rag_system/faiss_indexes/*.idx
+venv/
+demo/
+
+# IDE settings
+.idea/
+.vscode/
+
+# Secrets
+.env
+
+# Datasets (tieni solo census.csv)
+datasets/*
+!datasets/census.csv
+
+# Modelli addestrati (tieni solo census)
+trained_models/*
+!trained_models/test_census_model/
+
+# Immagini generate
+*.png
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store

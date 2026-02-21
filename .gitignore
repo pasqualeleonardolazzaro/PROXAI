@@ -23,7 +23,8 @@ datasets/*
 
 # Modelli addestrati (tieni solo census)
 trained_models/*
-!trained_models/test_census_model/
+!trained_models/Census_correct_checkpoints
+!trained_models/Census_wrong_checkpoints
 
 # Immagini generate
 *.png

@@ -38,7 +38,7 @@ ss.setdefault("reload_nonce", 0)      # cambia per forzare reload editor
 # ====================== NAVIGAZIONE ======================
 st.sidebar.title("PROXAI")
 page = st.sidebar.radio("Navigazione", ["Provenance Analysis", "Graph Chat", "Provenance Explorer","Global Analysis","Local Analysis"], index=0)
-st.sidebar.caption(f"Working dir: {BASE_DIR}")
+#st.sidebar.caption(f"Working dir: {BASE_DIR}")
 
 # ====================== HELPERS COMUNI ======================
 def ensure_backup():
@@ -701,7 +701,7 @@ if page == "Global Analysis":
                     st.success("success!")
 
                     # --- Mostra i risultati ---
-                    st.header("3. Risults")
+                    st.header("3. Results")
 
                     
                     try:

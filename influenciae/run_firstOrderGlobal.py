@@ -7,6 +7,7 @@ import numpy as np
 import tensorflow as tf
 import glob
 import os
+import h5py
 from deel.influenciae.common import InfluenceModel
 from deel.influenciae.influence import FirstOrderInfluenceCalculator
 from deel.influenciae.common import ExactIHVP
@@ -76,10 +77,9 @@ def extract_point_data(idx, X_data, y_data, columns):
 
 def load_model(model_path):
     """
-    Load Keras/TensorFlow model.
-    
-    If model_path is a file or a standard SavedModel directory, it loads it.
-    If model_path is a directory of checkpoints, it loads the latest one (by modification time).
+    Load Keras/TensorFlow model
+    Handles version mismatches by skipping optimizer loading,
+    extracting the loss function from metadata to recompile.
     """
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"Model not found at {model_path}")
@@ -88,12 +88,7 @@ def load_model(model_path):
 
     # Check if the path is a directory
     if os.path.isdir(model_path):
-        # EDGE CASE: A "SavedModel" is a directory containing 'saved_model.pb'.
-        # If this file exists, we treat the directory as a single model.
         if "saved_model.pb" not in os.listdir(model_path):
-            
-            # It is a directory of checkpoints. Find the latest file.
-            # Look for common Keras extensions. Add others if you use specific formats.
             extensions = ['*.h5', '*.keras', '*.hdf5', '*.pb'] 
             files = []
             for ext in extensions:
@@ -102,16 +97,68 @@ def load_model(model_path):
             if not files:
                 raise FileNotFoundError(f"No valid model files ({extensions}) found in {model_path}")
 
-            # Find the latest file based on modification time
             latest_model = max(files, key=os.path.getmtime)
             final_path = latest_model
 
-    # Load the model
+    # Try loading normally
     try:
         model = tf.keras.models.load_model(final_path)
         return model
+    except Exception:
+        pass
+
+    # Load without compilation to bypass optimizer errors
+    try:
+        model = tf.keras.models.load_model(final_path, compile=False)
     except Exception as e:
         raise RuntimeError(f"Failed to load Keras model from '{final_path}': {e}")
+
+    #detect loss
+    detected_loss = None
+    
+    if os.path.isfile(final_path) and (final_path.endswith('.h5') or final_path.endswith('.hdf5') or final_path.endswith('.keras')):
+        try:
+            with h5py.File(final_path, 'r') as f:
+                if 'training_config' in f.attrs:
+                    # training_config is a JSON string stored in attributes
+                    train_conf_str = f.attrs.get('training_config')
+                    if hasattr(train_conf_str, 'decode'):
+                        train_conf_str = train_conf_str.decode('utf-8')
+                    
+                    train_conf = json.loads(train_conf_str)
+                    
+                    if 'loss' in train_conf:
+                        loss_config = train_conf['loss']
+                        # Attempt to deserialize using Keras utils
+                        try:
+                            detected_loss = tf.keras.losses.deserialize(loss_config)
+                        except:
+                            # use the config directly
+                            detected_loss = loss_config
+        except Exception:
+            pass 
+    
+    # Fallback Heuristic if metadata extraction failed
+    if detected_loss is None:
+        # Guess based on last layer activation
+        try:
+            last_layer = model.layers[-1]
+            act = getattr(last_layer, 'activation', None)
+            act_name = getattr(act, '__name__', str(act)).lower()
+            
+            if 'sigmoid' in act_name:
+                detected_loss = 'binary_crossentropy'
+            elif 'softmax' in act_name:
+                detected_loss = 'sparse_categorical_crossentropy'
+            else:
+                detected_loss = 'mse' # Regression default
+        except:
+            detected_loss = 'mse'
+
+    # use a dummy optimizer because only the loss is needed for Influence calculation
+    model.compile(optimizer='adam', loss=detected_loss, metrics=['accuracy'])
+    
+    return model
 
 def main():
     try:

@@ -16,28 +16,55 @@ from deel.influenciae.common import ExactIHVP
 
 def get_unreduced_loss(original_loss):
     """
-    Helper to convert a standard Keras loss (string or object) 
-    into a loss object with reduction=tf.keras.losses.Reduction.NONE
+    Converts a loss function (object, string, or config dict) to one with reduction=NONE.
     """
     NONE = tf.keras.losses.Reduction.NONE
     
-    # generic Keras Loss object
+    # Keras Loss Objects (Standard)
     if hasattr(original_loss, 'get_config'):
         try:
             config = original_loss.get_config()
             config['reduction'] = NONE
-            # Re-instantiate the class with the new config
             return original_loss.__class__.from_config(config)
         except Exception:
-            pass # Fallback to string matching if config fails
+            pass 
 
-    # it is a string (common in saved models) or failed above
+    # Dictionary Configs
+    if isinstance(original_loss, dict) and 'class_name' in original_loss:
+        try:
+            class_name = original_loss['class_name']
+            config = original_loss.get('config', {})
+
+            # Convert to standard dict
+            if hasattr(config, 'to_dict'):
+                config = config.to_dict()
+            elif not isinstance(config, dict):
+                try:
+                    config = dict(config)
+                except:
+                    pass
+
+            if isinstance(config, dict):
+                config = config.copy()
+                config['reduction'] = NONE
+                
+                # Attempt to instantiate the class directly
+                if hasattr(tf.keras.losses, class_name):
+                    return getattr(tf.keras.losses, class_name).from_config(config)
+                
+                return tf.keras.losses.deserialize({'class_name': class_name, 'config': config})
+        except Exception:
+            pass
+
     loss_name = ""
     if isinstance(original_loss, str):
         loss_name = original_loss.lower()
     elif hasattr(original_loss, '__name__'):
         loss_name = original_loss.__name__.lower()
+    elif isinstance(original_loss, dict) and 'class_name' in original_loss:
+        loss_name = original_loss['class_name'].lower()
         
+    # string mapping
     if loss_name in ['mse', 'mean_squared_error']:
         return tf.keras.losses.MeanSquaredError(reduction=NONE)
     if loss_name in ['mae', 'mean_absolute_error']:
@@ -48,15 +75,8 @@ def get_unreduced_loss(original_loss):
         return tf.keras.losses.SparseCategoricalCrossentropy(reduction=NONE)
     if loss_name in ['binary_crossentropy']:
         return tf.keras.losses.BinaryCrossentropy(reduction=NONE)
-    if loss_name in ['kld', 'kullback_leibler_divergence']:
-        return tf.keras.losses.KLDivergence(reduction=NONE)
-
-    # raise an error telling the user they must supply a compatible loss.
-    raise ValueError(
-        f"Could not automatically convert loss '{original_loss}' to a non-reduced format. "
-        "Deel-influenciae requires reduction=tf.keras.losses.Reduction.NONE. "
-        "Please re-compile your model with this specific reduction or use a standard Keras loss string."
-    )
+        
+    raise ValueError(f"Could not convert loss '{original_loss}' to non-reduced format.")
 
 def safe_serialize(obj):
     """Helper to ensure numpy types are converted to Python native types for JSON"""

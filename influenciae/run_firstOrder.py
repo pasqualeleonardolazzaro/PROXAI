@@ -64,16 +64,18 @@ def get_unreduced_loss(original_loss):
     elif isinstance(original_loss, dict) and 'class_name' in original_loss:
         loss_name = original_loss['class_name'].lower()
         
+    loss_name=loss_name.replace('_', '')
+        
     # string mapping
-    if loss_name in ['mse', 'mean_squared_error']:
+    if loss_name in ['mse', 'meansquarederror']:
         return tf.keras.losses.MeanSquaredError(reduction=NONE)
-    if loss_name in ['mae', 'mean_absolute_error']:
+    if loss_name in ['mae', 'meanabsoluteerror']:
         return tf.keras.losses.MeanAbsoluteError(reduction=NONE)
-    if loss_name in ['categorical_crossentropy']:
+    if loss_name in ['categoricalcrossentropy']:
         return tf.keras.losses.CategoricalCrossentropy(reduction=NONE)
-    if loss_name in ['sparse_categorical_crossentropy']:
+    if loss_name in ['sparsecategoricalcrossentropy']:
         return tf.keras.losses.SparseCategoricalCrossentropy(reduction=NONE)
-    if loss_name in ['binary_crossentropy']:
+    if loss_name in ['binarycrossentropy']:
         return tf.keras.losses.BinaryCrossentropy(reduction=NONE)
         
     raise ValueError(f"Could not convert loss '{original_loss}' to non-reduced format.")

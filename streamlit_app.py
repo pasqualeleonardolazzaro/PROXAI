@@ -177,45 +177,6 @@ def run_FirstOrder(model_path, dataset_path, pipeline_path, sample_to_predict):
 
     return json.loads(result.stdout)
 
-def run_FirstOrder_global(model_path, dataset_path, pipeline_path):
-    """
-    Calls the FirstOrder script inside the influenciae env.
-    sample_to_predict can be a Pandas row (Series) or dict-like.
-    """
-    ensure_influenciae_env()
-
-    python_path = get_influenciae_python()
-
-    script_path = BASE_DIR / "influenciae" / "run_firstOrderGlobal.py"
-
-    if not script_path.exists():
-        raise FileNotFoundError(f"Influence script not found at {script_path}")
-
-
-    # Create payload
-    data = {
-        "model_path": str(model_path),
-        "dataset": str(dataset_path),
-        "pipeline_path": str(pipeline_path),
-    }
-
-    # Call subprocess
-    result = subprocess.run(
-        [str(python_path), str(script_path)],
-        input=json.dumps(data),
-        text=True,
-        capture_output=True
-    )
-
-    # Error handling 
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"Error running influenciae script:\n"
-            f"STDOUT: {result.stdout}\n\n"
-            f"STDERR: {result.stderr}"
-        )
-
-    return json.loads(result.stdout)
 
 def run_TracIn(model_path, dataset_path, pipeline_path, sample_to_predict):
     """
@@ -263,20 +224,19 @@ def run_TracIn(model_path, dataset_path, pipeline_path, sample_to_predict):
 
     return json.loads(result.stdout)
 
-def run_TracIn_global(model_path, dataset_path, pipeline_path):
+
+
+def run_global_influence(script_filename, model_path, dataset_path, pipeline_path):
     """
-    Calls the FirstOrder script inside the influenciae env.
-    sample_to_predict can be a Pandas row (Series) or dict-like.
+    Dynamically calls any influence script inside the influenciae env.
     """
     ensure_influenciae_env()
-
     python_path = get_influenciae_python()
-
-    script_path = BASE_DIR / "influenciae" / "run_TracInGlobal.py"
+    
+    script_path = BASE_DIR / "influenciae" / script_filename
 
     if not script_path.exists():
         raise FileNotFoundError(f"Influence script not found at {script_path}")
-
 
     # Create payload
     data = {
@@ -286,8 +246,7 @@ def run_TracIn_global(model_path, dataset_path, pipeline_path):
     }
 
     # Call subprocess
-    result = subprocess.run(
-        [str(python_path), str(script_path)],
+    result = subprocess.run([str(python_path), str(script_path)],
         input=json.dumps(data),
         text=True,
         capture_output=True
@@ -296,7 +255,7 @@ def run_TracIn_global(model_path, dataset_path, pipeline_path):
     # Error handling 
     if result.returncode != 0:
         raise RuntimeError(
-            f"Error running influenciae script:\n"
+            f"Error running {script_filename}:\n"
             f"STDOUT: {result.stdout}\n\n"
             f"STDERR: {result.stderr}"
         )
@@ -689,51 +648,32 @@ if page == "Global Analysis":
         "Select model:",
         models_options
     )
-
-    st.header("2. Chose Explaination Method")
-
-    if st.button("feature analysis with SHAP"):
+    st.header("2. Choose Explanation Method")
+    
+    st.markdown("### Feature Analysis")
+    
+    if st.button("calculate with SHAP"):
         if selected_dataset and selected_pipeline and selected_model:
-            with st.spinner("Calculating global feature SHAPLY values (this may take a while)..."):
+            with st.spinner("Calculating global feature SHAP values (this may take a while)..."):
                 cmd, returncode = run_shap(selected_model, selected_pipeline, selected_dataset)
 
                 if returncode == 0:
                     st.success("success!")
-
-                    # --- Mostra i risultati ---
                     st.header("3. Results")
-
-                    
                     try:
-                        # Get the stdout from the session state
                         output_json = st.session_state.get('stdout', '').strip()
-
-                        # Check if there is any output
                         if not output_json:
                             st.warning("No output returned.")
                         else:
-                            # Parse the JSON string into a Python dictionary
                             results = json.loads(output_json)
-
-                            # --- Display the table from 'top_features' ---
                             top_features_data = results.get("top_features")
                             if top_features_data:
                                 st.subheader("Most influential Features")
-                                # Convert the list of dictionaries directly into a Pandas DataFrame
                                 df = pd.DataFrame(top_features_data)
-
-                                
-
-                               
-                                #    Change 'feature_name' if your column has a different title.
                                 feature_column_name = "Feature" 
 
                                 if feature_column_name in df.columns:
-                                    # 2. Create a new column with the clickable Neo4j links.
                                     df["Open in Neo4j Browser"] = df[feature_column_name].apply(create_neo4j_url)
-
-                                    # 3. Display the DataFrame with the clickable link column.
-                                    #    Use st.column_config.LinkColumn for an interactive link.
                                     st.dataframe(
                                         df,
                                         column_config={
@@ -747,10 +687,8 @@ if page == "Global Analysis":
                                     )
                                 else:
                                     st.warning(f"The specified feature column '{feature_column_name}' was not found.")
-                                    st.dataframe(df) # Fallback to display the original dataframe
+                                    st.dataframe(df)
 
-
-                            # --- Display the plot from 'plot_path' ---
                             image_path_str = results.get("plot_path")
                             if image_path_str:
                                 image_path = Path(image_path_str)
@@ -769,52 +707,63 @@ if page == "Global Analysis":
                         st.error(f"Error visualizing the results: {e}")
                         st.text_area("Output (stdout)", st.session_state.get('stdout', ''), height=150)
         else:
-            st.warning("Select  dataset,  pipeline and modello.")
+            st.warning("Select dataset, pipeline and model.")
 
-   # 1. Create columns to place buttons side-by-side
-    c_btn1, c_btn2 = st.columns(2)
+    # --- DYNAMIC INFLUENCE METHOD DISCOVERY ---
+    st.markdown("### Training Data Influence")
+    
+    # 1. Scan the directory for scripts matching the naming convention "run_*Global.py"
+    influence_scripts_dir = BASE_DIR / "influenciae"
+    influence_options = {}
+    
+    if influence_scripts_dir.exists():
+        for script_file in influence_scripts_dir.glob("*_global.py"):
+            if script_file.name == "base_analyzer_global.py":
+                continue
+            display_name = script_file.stem.replace("_global", "")
+            display_name = display_name[:1].upper() + display_name[1:]
+            influence_options[display_name] = script_file.name
 
-    with c_btn1:
-        run_fo_global = st.button("Influence score with FirstOrder")
+    # Fallback just in case directory scan fails
+    if not influence_options:
+        influence_options = {
+            "FirstOrder": "first_order_global.py", 
+            "TracIn": "tracIn_global.py"
+        }
 
-    with c_btn2:
-        run_tracin_global = st.button("Influence score with TracIn")
+    # 2. Setup the dynamic UI Selector
+    col_sel, col_btn = st.columns([2, 1])
+    with col_sel:
+        selected_method_name = st.selectbox("Select Influence Funcion:", list(influence_options.keys()))
+    
+    with col_btn:
+        st.write("") # Padding to align with selectbox
+        st.write("") 
+        run_influence = st.button(f"Calculate {selected_method_name}")
 
-    # 2. Check if EITHER button was clicked
-    if run_fo_global or run_tracin_global:
+    # 3. Execution logic
+    if run_influence:
         if selected_dataset and selected_pipeline and selected_model:
+            selected_script = influence_options[selected_method_name]
             
-            # Determine the method name for the spinner text
-            method_name = "FirstOrder" if run_fo_global else "TracIn"
-            
-            with st.spinner(f"Calculating global {method_name} influence (this may take a while)..."):
+            with st.spinner(f"Calculating global {selected_method_name} influence (this may take a while)..."):
                 try:
-                    # --- LOGIC BRANCHING HERE ---
-                    if run_fo_global:
-                        globalInfluenceResults = run_FirstOrder_global(
-                            selected_model, 
-                            selected_dataset, 
-                            selected_pipeline
-                        )
-                    else: # run_tracin_global
-                        globalInfluenceResults = run_TracIn_global(
-                            selected_model, 
-                            selected_dataset, 
-                            selected_pipeline
-                        )
-                   
+                    # Single generic runner call
+                    globalInfluenceResults = run_global_influence(
+                        selected_script,
+                        selected_model, 
+                        selected_dataset, 
+                        selected_pipeline
+                    )
                     
-                    # check status
                     if globalInfluenceResults.get("status") == "success":
-                        
-                        # Extract Data
                         stats = globalInfluenceResults["global_statistics"]
                         top_influential = globalInfluenceResults["most_influential_samples"]
                         potential_poison = globalInfluenceResults["potential_mislabeled_samples"]
                         debug_info = globalInfluenceResults.get("debug_info", {})
 
-                        # stats
-                        st.success(f"{method_name} Analysis Complete")
+                        st.success(f"{selected_method_name} Analysis Complete")
+                        
                         c1, c2, c3, c4 = st.columns(4)
                         c1.metric("Test Set Size", stats.get('n_test_samples_analyzed', 'N/A'))
                         c2.metric("Train Set Size", debug_info.get('X_train', 'N/A'))
@@ -823,7 +772,6 @@ if page == "Global Analysis":
                         
                         st.markdown("---")
 
-                        # Graph Link
                         table_config = {
                             "Graph Link": st.column_config.LinkColumn(
                                 "Graph Context",
@@ -836,7 +784,7 @@ if page == "Global Analysis":
                             )
                         }
 
-                        #  TOP INFLUENTIAL 
+                        # TOP INFLUENTIAL 
                         st.subheader("Proponents")
                         st.caption("Training examples that contributed most positively.")
                         
@@ -853,7 +801,6 @@ if page == "Global Analysis":
                         st.caption("Training examples with strong negative influence.")
                         
                         df_poison = format_influence_df(potential_poison)
-                        
                         st.dataframe(
                             df_poison.style.background_gradient(cmap="Reds_r", subset=["mean_influence_score"]),
                             use_container_width=True,
@@ -872,6 +819,8 @@ if page == "Global Analysis":
                     st.code(str(e))
                 except Exception as e:
                     st.error(f"Unexpected Error: {e}")
+        else:
+            st.warning("Please select a dataset, pipeline, and model before running the analysis.")
 
 # ====================== PAGINA: Local ANALYSIS ======================
 if page == "Local Analysis":

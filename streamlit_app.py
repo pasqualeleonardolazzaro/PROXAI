@@ -224,6 +224,50 @@ def run_TracIn(model_path, dataset_path, pipeline_path, sample_to_predict):
 
     return json.loads(result.stdout)
 
+def run_local_influence(script_filename, model_path, dataset_path, pipeline_path, sample_to_predict):
+    """
+    Dynamically calls any local influence script inside the influenciae env.
+    sample_to_predict can be a Pandas row (Series) or dict-like.
+    """
+    ensure_influenciae_env()
+    python_path = get_influenciae_python()
+    
+    script_path = BASE_DIR / "influenciae" / script_filename
+
+    if not script_path.exists():
+        raise FileNotFoundError(f"Influence script not found at {script_path}")
+
+    # Convert sample row to JSON-friendly dict
+    if hasattr(sample_to_predict, "to_dict"):
+        sample_dict = sample_to_predict.to_dict()
+    else:
+        sample_dict = sample_to_predict
+
+    # Create payload
+    data = {
+        "model_path": str(model_path),
+        "dataset": str(dataset_path),
+        "pipeline_path": str(pipeline_path),
+        "sample_to_predict": sample_dict,
+    }
+
+    # Call subprocess
+    result = subprocess.run([str(python_path), str(script_path)],
+        input=json.dumps(data),
+        text=True,
+        capture_output=True
+    )
+
+    # Error handling 
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Error running {script_filename}:\n"
+            f"STDOUT: {result.stdout}\n\n"
+            f"STDERR: {result.stderr}"
+        )
+
+    return json.loads(result.stdout)
+
 
 
 def run_global_influence(script_filename, model_path, dataset_path, pipeline_path):
@@ -943,7 +987,8 @@ if page == "Local Analysis":
 
         
         # LOCAL SELECTION: Pick the sample for Influence
-        
+
+        # LOCAL SELECTION: Pick the sample for Influence
         st.subheader("Select a Sample for Local Explanation")
         st.markdown("Select a row in the table below to analyze its influence.")
 
@@ -967,48 +1012,64 @@ if page == "Local Analysis":
             selected_row_data = df_display.loc[original_index]
             
             st.success(f"Selected Sample Index: {original_index}")
+            st.markdown("### Influence Analysis")
             
-            #  First Order
+            # --- DYNAMIC INFLUENCE METHOD DISCOVERY FOR LOCAL ---
+            # Look for scripts ending with 'Local.py' to separate them from Global ones
+            influence_scripts_dir = BASE_DIR / "influenciae"
+            local_influence_options = {}
             
-            st.markdown("Influence Analysis")
-        
-            col_btn, col_info = st.columns([1, 4])
+            if influence_scripts_dir.exists():
+                for script_file in influence_scripts_dir.glob("*_local.py"):
+                    # Clean up the name for the UI:
+                    if script_file.name == "base_analyzer_local.py":
+                        continue
+                    display_name = script_file.stem.replace("_local", "")
+                    display_name = display_name[:1].upper() + display_name[1:]
+                    local_influence_options[display_name] = script_file.name
+
+            # Fallback if discovery fails or scripts haven't been renamed yet
+            if not local_influence_options:
+                local_influence_options = {
+                    "FirstOrder": "first_order_local.py", 
+                    "TracIn": "tracin_local.py"
+                }
+
+            # 3-column layout for dropdown, button, and raw JSON
+            col_sel, col_btn, col_info = st.columns([2, 2, 2])
             
+            with col_sel:
+                selected_local_method = st.selectbox(
+                    "Select Local Influence Metric:", 
+                    list(local_influence_options.keys())
+                )
+
             with col_btn:
-                # Renamed variable for clarity
-                run_fo_clicked = st.button("Run FirstOrder on Selection") 
-                # New button
-                run_tracin_clicked = st.button("Run TracIn on Selection") 
-
-            # Logic for FirstOrder
-            if run_fo_clicked:
-                with st.spinner("Calculating FirstOrder Influence..."):
-                    st.session_state.influence_result = run_FirstOrder(
-                        BASE_DIR / selected_model,
-                        BASE_DIR / selected_dataset,
-                        BASE_DIR / selected_pipeline,
-                        selected_row_data
-                    )
-                    st.toast("Calculated FirstOrder Influence!", icon="🚀")
-
-            # Logic for TracIn (The new functionality)
-            if run_tracin_clicked:
-                with st.spinner("Calculating TracIn Influence..."):
-                    st.session_state.influence_result = run_TracIn(
-                        BASE_DIR / selected_model,
-                        BASE_DIR / selected_dataset,
-                        BASE_DIR / selected_pipeline,
-                        selected_row_data
-                    )
-                    st.toast("Calculated TracIn Influence!", icon="🚀")
+                st.write("") # Padding to align with selectbox
+                st.write("")
+                run_influence_clicked = st.button(f"Calculate {selected_local_method}")
 
             with col_info:
                 with st.expander("View Selected Row Details"):
                     st.json(selected_row_data.to_dict(), expanded=False)
 
+            # --- EXECUTE INFLUENCE DYNAMICALLY ---
+            if run_influence_clicked:
+                selected_script = local_influence_options[selected_local_method]
+                with st.spinner(f"Calculating {selected_local_method} Influence..."):
+                    try:
+                        st.session_state.influence_result = run_local_influence(
+                            selected_script,
+                            BASE_DIR / selected_model,
+                            BASE_DIR / selected_dataset,
+                            BASE_DIR / selected_pipeline,
+                            selected_row_data
+                        )
+                        st.toast(f"Calculated {selected_local_method} Influence!", icon="🚀")
+                    except Exception as e:
+                        st.error(f"Execution Error: {e}")
             
-            # DISPLAY RESULTS
-            
+            # --- DISPLAY RESULTS ---
             if "influence_result" in st.session_state and st.session_state.influence_result:
                 res = st.session_state.influence_result
                 
@@ -1030,7 +1091,7 @@ if page == "Local Analysis":
                     influential_points = res.get('top_influential_points', [])
                     
                     if influential_points:
-                        flattened_data = []
+                        flattened_data =[]
                         for point in influential_points:
                             row = point['features'].copy()
                             
@@ -1050,7 +1111,7 @@ if page == "Local Analysis":
 
                         # Reorder columns: Score, Label, Graph Link, then Features
                         # Exclude 'Graph Query' from the loop so we can place it manually
-                        feature_cols = [c for c in df_results.columns if c not in ['Influence Score', 'Label', 'Graph Query']]
+                        feature_cols = [c for c in df_results.columns if c not in['Influence Score', 'Label', 'Graph Query']]
                         cols = ['Influence Score', 'Label', 'Graph Query'] + feature_cols
                         df_results = df_results[cols]
 
@@ -1063,8 +1124,8 @@ if page == "Local Analysis":
                                 "Influence Score": st.column_config.ProgressColumn(
                                     "Influence",
                                     format="%.4f",
-                                    min_value=df_results['Influence Score'].min(),
-                                    max_value=df_results['Influence Score'].max(),
+                                    min_value=float(df_results['Influence Score'].min()),
+                                    max_value=float(df_results['Influence Score'].max()),
                                 ),
                                 "Label": st.column_config.TextColumn("True Label"),
                                 
@@ -1085,8 +1146,155 @@ if page == "Local Analysis":
                     with st.expander("View Raw JSON Output"):
                         st.json(res)
                 else:
-                    st.error("Analysis returned a non-success status.")
+                    st.error(f"Analysis returned a non-success status: {res.get('error', 'Unknown Error')}")
                     st.json(res)
 
         else:
             st.info("👆 Please select a row from the table above.")
+        
+        # st.subheader("Select a Sample for Local Explanation")
+        # st.markdown("Select a row in the table below to analyze its influence.")
+
+        # # dataframe selection
+        # event = st.dataframe(
+        #     filtered_df,
+        #     use_container_width=True,
+        #     on_select="rerun",
+        #     selection_mode="single-row"
+        # )
+
+        # if event.selection.rows:
+        #     # index relative to the filtered dataframe
+        #     selected_row_idx = event.selection.rows[0]
+        #     # actual index from the original dataset
+        #     original_index = filtered_df.index[selected_row_idx]
+            
+        #     st.session_state.selected_sample_index = original_index
+            
+        #     # Display selected data
+        #     selected_row_data = df_display.loc[original_index]
+            
+        #     st.success(f"Selected Sample Index: {original_index}")
+            
+        #     #  First Order
+            
+        #     st.markdown("Influence Analysis")
+        
+        #     col_btn, col_info = st.columns([1, 4])
+            
+        #     with col_btn:
+        #         # Renamed variable for clarity
+        #         run_fo_clicked = st.button("Run FirstOrder on Selection") 
+        #         # New button
+        #         run_tracin_clicked = st.button("Run TracIn on Selection") 
+
+        #     # Logic for FirstOrder
+        #     if run_fo_clicked:
+        #         with st.spinner("Calculating FirstOrder Influence..."):
+        #             st.session_state.influence_result = run_FirstOrder(
+        #                 BASE_DIR / selected_model,
+        #                 BASE_DIR / selected_dataset,
+        #                 BASE_DIR / selected_pipeline,
+        #                 selected_row_data
+        #             )
+        #             st.toast("Calculated FirstOrder Influence!", icon="🚀")
+
+        #     # Logic for TracIn (The new functionality)
+        #     if run_tracin_clicked:
+        #         with st.spinner("Calculating TracIn Influence..."):
+        #             st.session_state.influence_result = run_TracIn(
+        #                 BASE_DIR / selected_model,
+        #                 BASE_DIR / selected_dataset,
+        #                 BASE_DIR / selected_pipeline,
+        #                 selected_row_data
+        #             )
+        #             st.toast("Calculated TracIn Influence!", icon="🚀")
+
+        #     with col_info:
+        #         with st.expander("View Selected Row Details"):
+        #             st.json(selected_row_data.to_dict(), expanded=False)
+
+            
+        #     # DISPLAY RESULTS
+            
+        #     if "influence_result" in st.session_state and st.session_state.influence_result:
+        #         res = st.session_state.influence_result
+                
+        #         # Check if successful
+        #         if res.get('status') == 'success':
+        #             st.divider()
+        #             st.subheader("📊 Analysis Results")
+
+        #             # Display Prediction
+        #             preds = res.get('prediction', [[0]])[0] 
+        #             formatted_preds = ", ".join([f"{p:.4f}" for p in preds])
+                    
+        #             c1, c2, c3 = st.columns(3)
+        #             c1.metric("Status", "Success", delta_color="normal")
+        #             c2.metric("Predicted Output", formatted_preds)
+        #             c3.metric("Outcome", res['sample_analyzed'].get('Outcome', 'N/A'))
+
+        #             # Process Top Influential Points
+        #             influential_points = res.get('top_influential_points', [])
+                    
+        #             if influential_points:
+        #                 flattened_data = []
+        #                 for point in influential_points:
+        #                     row = point['features'].copy()
+                            
+        #                     # --- GENERATE LINK ---
+        #                     neo4j_url = create_fingerprint_url(row)
+                            
+        #                     # Add data to the row for display
+        #                     row['Influence Score'] = point['influence_score']
+        #                     row['Label'] = str(point['label'])
+                            
+        #                     # Add the generated URL to a specific column
+        #                     row['Graph Query'] = neo4j_url
+                            
+        #                     flattened_data.append(row)
+                        
+        #                 df_results = pd.DataFrame(flattened_data)
+
+        #                 # Reorder columns: Score, Label, Graph Link, then Features
+        #                 # Exclude 'Graph Query' from the loop so we can place it manually
+        #                 feature_cols = [c for c in df_results.columns if c not in ['Influence Score', 'Label', 'Graph Query']]
+        #                 cols = ['Influence Score', 'Label', 'Graph Query'] + feature_cols
+        #                 df_results = df_results[cols]
+
+        #                 st.write("Most Influential Training Points")
+                        
+        #                 st.dataframe(
+        #                     df_results,
+        #                     use_container_width=True,
+        #                     column_config={
+        #                         "Influence Score": st.column_config.ProgressColumn(
+        #                             "Influence",
+        #                             format="%.4f",
+        #                             min_value=df_results['Influence Score'].min(),
+        #                             max_value=df_results['Influence Score'].max(),
+        #                         ),
+        #                         "Label": st.column_config.TextColumn("True Label"),
+                                
+        #                         # --- CONFIGURE THE BUTTON ---
+        #                         "Graph Query": st.column_config.LinkColumn(
+        #                             "Graph Analysis",
+        #                             display_text="Find entity in graph", 
+        #                             help="Click to run a Cypher query finding this exact row based on its values"
+        #                         )
+        #                     },
+        #                     hide_index=True
+        #                 )
+                        
+        #             else:
+        #                 st.warning("No influential points returned.")
+                        
+        #             # Raw JSON Viewer (Hidden by default for cleanliness)
+        #             with st.expander("View Raw JSON Output"):
+        #                 st.json(res)
+        #         else:
+        #             st.error("Analysis returned a non-success status.")
+        #             st.json(res)
+
+        # else:
+        #     st.info("👆 Please select a row from the table above.")
